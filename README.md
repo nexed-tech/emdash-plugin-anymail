@@ -1,2 +1,2 @@
-# emdash-maileroo
-plugin for emdash to send emails using maileroo
+# emdash-plugin-anymail
+plugin for emdash to send emails using maileroo, resend and others
