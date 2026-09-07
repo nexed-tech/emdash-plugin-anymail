@@ -11,14 +11,16 @@
  * });
  * ```
  *
- * The framework-agnostic sender is available separately at
- * `emdash-plugin-anymail/core` (no EmDash dependency).
+ * The default export is a lightweight `PluginDescriptor` factory (no `emdash`
+ * dependency). The plugin runtime itself is at `emdash-plugin-anymail/plugin`,
+ * and the framework-agnostic sender at `emdash-plugin-anymail/core`.
  */
 
-export { createAnymailPlugin, createAnymailPlugin as default, PLUGIN_ID } from "./plugin";
+export { anymail, anymail as default, type AnymailDescriptor } from "./descriptor";
+export { PLUGIN_ID, ENV_VARS, SETTINGS_SCHEMA } from "./settings-schema";
 export { VERSION } from "./version";
 
-// Re-export the core so `import { deliver } from "emdash-plugin-anymail"` also works.
+// Convenience: the core sender is also reachable from the package root.
 export {
   deliver,
   normalize,

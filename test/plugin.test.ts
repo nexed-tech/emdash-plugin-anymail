@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AnymailConfigError } from "../src/core/errors";
-import { createAnymailPlugin, PLUGIN_ID } from "../src/plugin";
+import { anymail } from "../src/descriptor";
+import { createPlugin } from "../src/plugin";
+import { PLUGIN_ID } from "../src/settings-schema";
 import { headerValue, stubFetch } from "./helpers";
 
 type Handler = (event: { message: unknown; source: string }, ctx: unknown) => Promise<void>;
 
 function getHandler(): Handler {
-  const plugin = createAnymailPlugin() as unknown as { hooks: Record<string, { handler: Handler }> };
+  const plugin = createPlugin() as unknown as { hooks: Record<string, { handler: Handler }> };
   return plugin.hooks["email:deliver"]!.handler;
 }
 
@@ -25,9 +27,27 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe("descriptor", () => {
+  it("is a native descriptor pointing at the /plugin entrypoint", () => {
+    const d = anymail();
+    expect(d).toMatchObject({
+      id: PLUGIN_ID,
+      format: "native",
+      entrypoint: "emdash-plugin-anymail/plugin",
+    });
+    expect(d.capabilities).toContain("hooks.email-transport:register");
+    expect(d.settingsSchema.apiKey.type).toBe("secret");
+  });
+
+  it("carries options through when given", () => {
+    expect(anymail({ foo: 1 }).options).toEqual({ foo: 1 });
+    expect(anymail().options).toBeUndefined();
+  });
+});
+
 describe("plugin definition", () => {
   it("has the expected id and a secret API-key field", () => {
-    const plugin = createAnymailPlugin() as unknown as {
+    const plugin = createPlugin() as unknown as {
       id: string;
       capabilities: string[];
       admin: { settingsSchema: Record<string, { type: string }> };
@@ -38,7 +58,7 @@ describe("plugin definition", () => {
   });
 
   it("lists every built-in provider in the dropdown", () => {
-    const plugin = createAnymailPlugin() as unknown as {
+    const plugin = createPlugin() as unknown as {
       admin: { settingsSchema: { provider: { options: Array<{ value: string }> } } };
     };
     expect(plugin.admin.settingsSchema.provider.options.map((o) => o.value)).toEqual([

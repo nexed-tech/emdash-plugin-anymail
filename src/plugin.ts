@@ -3,33 +3,16 @@ import type { PluginContext } from "emdash";
 
 import { deliver } from "./core/deliver";
 import { AnymailConfigError } from "./core/errors";
-import { providerList } from "./core/providers";
 import type { AddressInput, Logger } from "./core/types";
+import {
+  ALLOWED_HOSTS,
+  CAPABILITIES,
+  ENV_VARS,
+  PLUGIN_ID,
+  SETTINGS_SCHEMA,
+  type SettingKey,
+} from "./settings-schema";
 import { VERSION } from "./version";
-
-/** Plugin id — also the settings namespace (`plugin:anymail:settings:*`). */
-export const PLUGIN_ID = "anymail";
-
-/**
- * Every field can come from either an environment variable or the admin
- * settings form. The env var wins when both are set.
- *
- * EmDash 0.36 stores `secret`-type settings in the database in plaintext
- * (encryption-at-rest is not shipped yet), so on a hosting platform with a
- * real secret store — Cloudflare's `wrangler secret put`, a container's env —
- * put at least `ANYMAIL_API_KEY` there and leave the admin field blank.
- */
-const FIELDS = {
-  provider: "ANYMAIL_PROVIDER",
-  apiKey: "ANYMAIL_API_KEY",
-  from: "ANYMAIL_FROM",
-  fromName: "ANYMAIL_FROM_NAME",
-  domain: "ANYMAIL_DOMAIN",
-  endpoint: "ANYMAIL_ENDPOINT",
-  retries: "ANYMAIL_RETRIES",
-} as const;
-
-type Field = keyof typeof FIELDS;
 
 interface ResolvedConfig {
   provider: string | null;
@@ -40,7 +23,7 @@ interface ResolvedConfig {
   endpoint: string | null;
   retries: number | null;
   /** Per-field origin, for one diagnostic log line (never logs values). */
-  sources: Partial<Record<Field, "env" | "settings">>;
+  sources: Partial<Record<SettingKey, "env" | "settings">>;
 }
 
 function readEnv(name: string): string | null {
@@ -49,18 +32,17 @@ function readEnv(name: string): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-/** Merge env vars over the admin settings form, per field. */
+/** Merge `ANYMAIL_*` env vars over the admin settings form, per field. */
 async function resolveConfig(ctx: PluginContext): Promise<ResolvedConfig> {
+  const fields = Object.keys(ENV_VARS) as SettingKey[];
   const settingEntries = await Promise.all(
-    (Object.keys(FIELDS) as Field[]).map(
-      async (field) => [field, await ctx.kv.get<unknown>(`settings:${field}`)] as const,
-    ),
+    fields.map(async (field) => [field, await ctx.kv.get<unknown>(`settings:${field}`)] as const),
   );
-  const settings = Object.fromEntries(settingEntries) as Record<Field, unknown>;
+  const settings = Object.fromEntries(settingEntries) as Record<SettingKey, unknown>;
   const sources: ResolvedConfig["sources"] = {};
 
-  const pick = (field: Field): string | null => {
-    const fromEnv = readEnv(FIELDS[field]);
+  const pick = (field: SettingKey): string | null => {
+    const fromEnv = readEnv(ENV_VARS[field]);
     if (fromEnv !== null) {
       sources[field] = "env";
       return fromEnv;
@@ -93,76 +75,19 @@ async function resolveConfig(ctx: PluginContext): Promise<ResolvedConfig> {
 }
 
 /**
- * `anymail` — an EmDash `email:deliver` provider backed by any HTTP email API.
+ * The EmDash plugin entrypoint. EmDash's astro integration imports this as
+ * `import { createPlugin } from "emdash-plugin-anymail/plugin"` and calls it.
  *
- * Add it to `emdash({ plugins: [...] })` in `astro.config.mjs`. Configure it
- * either in **Settings → Plugins → anymail** in the admin, or with `ANYMAIL_*`
- * environment variables (which take precedence). EmDash then routes every
- * system email (recovery links, invites, magic links) and every
- * `ctx.email.send()` call through it.
+ * `options` is accepted for the descriptor contract but unused — configure the
+ * plugin with `ANYMAIL_*` env vars or the admin settings form.
  */
-export function createAnymailPlugin() {
+export function createPlugin(_options: Record<string, unknown> = {}) {
   return definePlugin({
     id: PLUGIN_ID,
     version: VERSION,
-    // `hooks.email-transport:register` is required or EmDash silently drops the
-    // email:deliver hook. `network:request` covers the outbound API call when
-    // the plugin runs sandboxed (in-process it uses the global fetch).
-    capabilities: ["hooks.email-transport:register", "network:request"],
-    allowedHosts: [
-      "api.resend.com",
-      "smtp.maileroo.com",
-      "api.mailgun.net",
-      "*.mailgun.net",
-      "api.postmarkapp.com",
-    ],
-
-    admin: {
-      settingsSchema: {
-        provider: {
-          type: "select",
-          label: "Provider",
-          description: "Which transactional email API to send through. Env: ANYMAIL_PROVIDER.",
-          options: providerList.map((p) => ({ value: p.id, label: p.label })),
-        },
-        apiKey: {
-          type: "secret",
-          label: "API key",
-          description:
-            "The provider's API key or server token. Prefer the ANYMAIL_API_KEY env var / platform secret store — EmDash does not yet encrypt this field at rest.",
-        },
-        from: {
-          type: "email",
-          label: "From address",
-          description: "Verified sender address, e.g. noreply@yourdomain.com. Env: ANYMAIL_FROM.",
-        },
-        fromName: {
-          type: "string",
-          label: "From name",
-          description: "Display name recipients see (optional). Env: ANYMAIL_FROM_NAME.",
-        },
-        domain: {
-          type: "string",
-          label: "Sending domain",
-          description:
-            "Mailgun only — the domain configured in Mailgun (e.g. mg.yourdomain.com). Env: ANYMAIL_DOMAIN.",
-        },
-        endpoint: {
-          type: "url",
-          label: "API endpoint override",
-          description:
-            "Optional regional endpoint, e.g. https://api.eu.mailgun.net/v3 for Mailgun EU. Env: ANYMAIL_ENDPOINT.",
-        },
-        retries: {
-          type: "number",
-          label: "Retries",
-          description: "Retry attempts on 429 / 5xx / network errors. Env: ANYMAIL_RETRIES.",
-          default: 2,
-          min: 0,
-          max: 5,
-        },
-      },
-    },
+    capabilities: [...CAPABILITIES],
+    allowedHosts: [...ALLOWED_HOSTS],
+    admin: { settingsSchema: { ...SETTINGS_SCHEMA } },
 
     hooks: {
       "email:deliver": async (event, ctx) => {
@@ -214,4 +139,4 @@ export function createAnymailPlugin() {
   });
 }
 
-export default createAnymailPlugin;
+export default createPlugin;
