@@ -1,0 +1,72 @@
+{
+  "name": "emdash-plugin-anymail",
+  "version": "0.1.0",
+  "description": "One EmDash email plugin, any HTTP email provider — Resend, Maileroo, Mailgun, Postmark. Free-plan friendly (no SMTP, just fetch).",
+  "keywords": [
+    "emdash",
+    "emdash-plugin",
+    "email",
+    "transactional-email",
+    "resend",
+    "maileroo",
+    "mailgun",
+    "postmark",
+    "cloudflare-workers"
+  ],
+  "license": "MIT",
+  "author": "Stephan Craane",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nexed-tech/emdash-plugin-anymail.git"
+  },
+  "homepage": "https://github.com/nexed-tech/emdash-plugin-anymail#readme",
+  "bugs": "https://github.com/nexed-tech/emdash-plugin-anymail/issues",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/plugin.d.ts",
+      "import": "./dist/plugin.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run test && npm run build"
+  },
+  "peerDependencies": {
+    "emdash": ">=0.36.0"
+  },
+  "peerDependenciesMeta": {
+    "emdash": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "emdash": "^0.36.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
