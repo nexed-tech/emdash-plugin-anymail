@@ -10,54 +10,96 @@ import { VERSION } from "./version";
 /** Plugin id — also the settings namespace (`plugin:anymail:settings:*`). */
 export const PLUGIN_ID = "anymail";
 
-/** The setting keys this plugin reads. Written by EmDash's auto-generated settings form. */
-interface AnymailSettings {
+/**
+ * Every field can come from either an environment variable or the admin
+ * settings form. The env var wins when both are set.
+ *
+ * EmDash 0.36 stores `secret`-type settings in the database in plaintext
+ * (encryption-at-rest is not shipped yet), so on a hosting platform with a
+ * real secret store — Cloudflare's `wrangler secret put`, a container's env —
+ * put at least `ANYMAIL_API_KEY` there and leave the admin field blank.
+ */
+const FIELDS = {
+  provider: "ANYMAIL_PROVIDER",
+  apiKey: "ANYMAIL_API_KEY",
+  from: "ANYMAIL_FROM",
+  fromName: "ANYMAIL_FROM_NAME",
+  domain: "ANYMAIL_DOMAIN",
+  endpoint: "ANYMAIL_ENDPOINT",
+  retries: "ANYMAIL_RETRIES",
+} as const;
+
+type Field = keyof typeof FIELDS;
+
+interface ResolvedConfig {
   provider: string | null;
   apiKey: string | null;
-  endpoint: string | null;
-  domain: string | null;
   from: string | null;
   fromName: string | null;
+  domain: string | null;
+  endpoint: string | null;
   retries: number | null;
+  /** Per-field origin, for one diagnostic log line (never logs values). */
+  sources: Partial<Record<Field, "env" | "settings">>;
 }
 
-const SETTING_KEYS = [
-  "provider",
-  "apiKey",
-  "endpoint",
-  "domain",
-  "from",
-  "fromName",
-  "retries",
-] as const;
+function readEnv(name: string): string | null {
+  const env = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env;
+  const value = env?.[name];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
 
-async function readSettings(ctx: PluginContext): Promise<AnymailSettings> {
-  const pairs = await Promise.all(
-    SETTING_KEYS.map(async (key) => [key, await ctx.kv.get<unknown>(`settings:${key}`)] as const),
+/** Merge env vars over the admin settings form, per field. */
+async function resolveConfig(ctx: PluginContext): Promise<ResolvedConfig> {
+  const settingEntries = await Promise.all(
+    (Object.keys(FIELDS) as Field[]).map(
+      async (field) => [field, await ctx.kv.get<unknown>(`settings:${field}`)] as const,
+    ),
   );
-  const raw = Object.fromEntries(pairs) as Record<(typeof SETTING_KEYS)[number], unknown>;
+  const settings = Object.fromEntries(settingEntries) as Record<Field, unknown>;
+  const sources: ResolvedConfig["sources"] = {};
 
-  const str = (v: unknown): string | null => (typeof v === "string" && v.length > 0 ? v : null);
-  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const pick = (field: Field): string | null => {
+    const fromEnv = readEnv(FIELDS[field]);
+    if (fromEnv !== null) {
+      sources[field] = "env";
+      return fromEnv;
+    }
+    const fromSettings = settings[field];
+    if (typeof fromSettings === "string" && fromSettings.length > 0) {
+      sources[field] = "settings";
+      return fromSettings;
+    }
+    if (typeof fromSettings === "number") {
+      sources[field] = "settings";
+      return String(fromSettings);
+    }
+    return null;
+  };
+
+  const retriesRaw = pick("retries");
+  const retries = retriesRaw !== null && Number.isFinite(Number(retriesRaw)) ? Number(retriesRaw) : null;
 
   return {
-    provider: str(raw.provider),
-    apiKey: str(raw.apiKey),
-    endpoint: str(raw.endpoint),
-    domain: str(raw.domain),
-    from: str(raw.from),
-    fromName: str(raw.fromName),
-    retries: num(raw.retries),
+    provider: pick("provider"),
+    apiKey: pick("apiKey"),
+    from: pick("from"),
+    fromName: pick("fromName"),
+    domain: pick("domain"),
+    endpoint: pick("endpoint"),
+    retries,
+    sources,
   };
 }
 
 /**
  * `anymail` — an EmDash `email:deliver` provider backed by any HTTP email API.
  *
- * Add it to `emdash({ plugins: [...] })` in `astro.config.mjs`, then open
- * **Settings → Plugins → anymail** in the admin and pick a provider + paste
- * an API key. EmDash then routes every system email (recovery links, invites,
- * magic links) and every `ctx.email.send()` call through it.
+ * Add it to `emdash({ plugins: [...] })` in `astro.config.mjs`. Configure it
+ * either in **Settings → Plugins → anymail** in the admin, or with `ANYMAIL_*`
+ * environment variables (which take precedence). EmDash then routes every
+ * system email (recovery links, invites, magic links) and every
+ * `ctx.email.send()` call through it.
  */
 export function createAnymailPlugin() {
   return definePlugin({
@@ -80,39 +122,41 @@ export function createAnymailPlugin() {
         provider: {
           type: "select",
           label: "Provider",
-          description: "Which transactional email API to send through.",
+          description: "Which transactional email API to send through. Env: ANYMAIL_PROVIDER.",
           options: providerList.map((p) => ({ value: p.id, label: p.label })),
         },
         apiKey: {
           type: "secret",
           label: "API key",
-          description: "The provider's API key or server token.",
+          description:
+            "The provider's API key or server token. Prefer the ANYMAIL_API_KEY env var / platform secret store — EmDash does not yet encrypt this field at rest.",
         },
         from: {
           type: "email",
           label: "From address",
-          description: "Verified sender address, e.g. noreply@yourdomain.com.",
+          description: "Verified sender address, e.g. noreply@yourdomain.com. Env: ANYMAIL_FROM.",
         },
         fromName: {
           type: "string",
           label: "From name",
-          description: "Display name recipients see (optional).",
+          description: "Display name recipients see (optional). Env: ANYMAIL_FROM_NAME.",
         },
         domain: {
           type: "string",
           label: "Sending domain",
-          description: "Mailgun only — the domain configured in Mailgun (e.g. mg.yourdomain.com).",
+          description:
+            "Mailgun only — the domain configured in Mailgun (e.g. mg.yourdomain.com). Env: ANYMAIL_DOMAIN.",
         },
         endpoint: {
           type: "url",
           label: "API endpoint override",
           description:
-            "Optional. Use a regional endpoint here, e.g. https://api.eu.mailgun.net/v3 for Mailgun EU.",
+            "Optional regional endpoint, e.g. https://api.eu.mailgun.net/v3 for Mailgun EU. Env: ANYMAIL_ENDPOINT.",
         },
         retries: {
           type: "number",
           label: "Retries",
-          description: "Retry attempts on 429 / 5xx / network errors.",
+          description: "Retry attempts on 429 / 5xx / network errors. Env: ANYMAIL_RETRIES.",
           default: 2,
           min: 0,
           max: 5,
@@ -122,24 +166,26 @@ export function createAnymailPlugin() {
 
     hooks: {
       "email:deliver": async (event, ctx) => {
-        const settings = await readSettings(ctx);
+        const config = await resolveConfig(ctx);
 
-        if (!settings.provider) {
+        if (!config.provider) {
           throw new AnymailConfigError(
-            "anymail: no provider selected (Settings → Plugins → anymail).",
+            "anymail: no provider set (ANYMAIL_PROVIDER or Settings → Plugins → anymail).",
           );
         }
-        if (!settings.apiKey) {
-          throw new AnymailConfigError("anymail: no API key configured.");
+        if (!config.apiKey) {
+          throw new AnymailConfigError("anymail: no API key set (ANYMAIL_API_KEY or the admin field).");
         }
-        if (!settings.from) {
-          throw new AnymailConfigError("anymail: no From address configured.");
+        if (!config.from) {
+          throw new AnymailConfigError("anymail: no From address set (ANYMAIL_FROM or the admin field).");
         }
 
+        ctx.log.debug?.("[anymail] config resolved", { provider: config.provider, sources: config.sources });
+
         const { message } = event;
-        const from: AddressInput = settings.fromName
-          ? { email: settings.from, name: settings.fromName }
-          : settings.from;
+        const from: AddressInput = config.fromName
+          ? { email: config.from, name: config.fromName }
+          : config.from;
 
         await deliver(
           {
@@ -150,17 +196,17 @@ export function createAnymailPlugin() {
             ...(message.html ? { html: message.html } : {}),
           },
           {
-            provider: settings.provider,
+            provider: config.provider,
             config: {
-              apiKey: settings.apiKey,
-              ...(settings.endpoint ? { endpoint: settings.endpoint } : {}),
-              ...(settings.domain ? { domain: settings.domain } : {}),
+              apiKey: config.apiKey,
+              ...(config.endpoint ? { endpoint: config.endpoint } : {}),
+              ...(config.domain ? { domain: config.domain } : {}),
             },
             // Prefer EmDash's capability-scoped fetch when present (sandbox),
             // otherwise fall back to the global fetch (in-process).
             ...(ctx.http ? { fetch: ctx.http.fetch.bind(ctx.http) } : {}),
             logger: ctx.log as Logger,
-            ...(settings.retries !== null ? { retries: settings.retries } : {}),
+            ...(config.retries !== null ? { retries: config.retries } : {}),
           },
         );
       },

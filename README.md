@@ -39,18 +39,42 @@ export default defineConfig({
 });
 ```
 
-Then in the EmDash admin, open **Settings → Plugins → anymail** and fill in:
+## Configure
 
-- **Provider** — Resend / Maileroo / Mailgun / Postmark
-- **API key** — stored as a secret, never rendered back
-- **From address** — a sender you have verified with the provider
-- **From name** — optional display name
-- **Sending domain** — Mailgun only
-- **API endpoint override** — optional, for regional endpoints
-- **Retries** — attempts on `429` / `5xx` / network error (default `2`)
+Every field can be set **either** in the admin **or** as an `ANYMAIL_*`
+environment variable. When both are set, the env var wins.
 
-That's it. EmDash auto-selects `anymail` as the email transport once it's the only
-provider installed; otherwise pick it under **Settings → Email**.
+| Field | Admin (Settings → Plugins → anymail) | Env var |
+|-------|-------------------------------------|---------|
+| Provider | Provider dropdown | `ANYMAIL_PROVIDER` (`resend` \| `maileroo` \| `mailgun` \| `postmark`) |
+| API key | API key (secret) | `ANYMAIL_API_KEY` |
+| From address | From address | `ANYMAIL_FROM` |
+| From name | From name | `ANYMAIL_FROM_NAME` |
+| Sending domain (Mailgun) | Sending domain | `ANYMAIL_DOMAIN` |
+| Endpoint override | API endpoint override | `ANYMAIL_ENDPOINT` |
+| Retries | Retries | `ANYMAIL_RETRIES` |
+
+> **Put the API key in a real secret store, not the admin field.** EmDash 0.36
+> stores `secret`-type plugin settings in the database in **plaintext**
+> (encryption-at-rest isn't shipped yet), so they land in D1 backups and exports.
+> On Cloudflare: `npx wrangler secret put ANYMAIL_API_KEY`. In a container: set it
+> in the environment. The admin field stays available for local dev and for hosts
+> without a secret store.
+
+A minimal Cloudflare setup — provider + key as secrets, the rest in the admin:
+
+```sh
+npx wrangler secret put ANYMAIL_API_KEY
+echo 'ANYMAIL_API_KEY = "re_dev_..."' >> .dev.vars   # local dev
+```
+
+```jsonc
+// wrangler.jsonc — non-secret defaults are fine as plain vars
+"vars": { "ANYMAIL_PROVIDER": "resend", "ANYMAIL_FROM": "noreply@yourdomain.com" }
+```
+
+EmDash auto-selects `anymail` as the email transport once it's the only provider
+installed; otherwise pick it under **Settings → Email**.
 
 > **Verify your sender domain first.** Every provider requires SPF/DKIM DNS
 > records for the domain you send `From`. Do that in the provider's dashboard
